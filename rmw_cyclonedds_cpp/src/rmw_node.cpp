@@ -1388,19 +1388,12 @@ static rmw_ret_t fini_and_free_sample(entityT & entity, void * loaned_message)
 {
   // fini the message
   rmw_cyclonedds_cpp::fini_message(&entity->type_supports, loaned_message);
-  // free the message memory
   RET_EXPECTED(
     dds_data_allocator_free(
       &entity->data_allocator,
       loaned_message),
     DDS_RETCODE_OK,
     "Failed to free the loaned message",
-    return RMW_RET_ERROR);
-  // fini the allocator
-  RET_EXPECTED(
-    dds_data_allocator_fini(&entity->data_allocator),
-    DDS_RETCODE_OK,
-    "Failed to fini data allocator",
     return RMW_RET_ERROR);
   return RMW_RET_OK;
 }
@@ -2887,6 +2880,7 @@ static rmw_subscription_t * create_subscription(
       rmw_subscription_free(rmw_subscription);
     });
   rmw_subscription->implementation_identifier = eclipse_cyclonedds_identifier;
+  dds_data_allocator_init(sub->enth, &sub->data_allocator);
   rmw_subscription->data = sub;
   rmw_subscription->topic_name =
     static_cast<const char *>(rmw_allocate(strlen(topic_name) + 1));
@@ -3379,7 +3373,6 @@ static rmw_ret_t rmw_take_loan_int(
     RMW_SET_ERROR_MSG("Subscription data is null");
     return RMW_RET_ERROR;
   }
-
   dds_sample_info_t info;
   struct ddsi_serdata * d;
   while (dds_takecdr(cdds_subscription->enth, &d, 1, &info, DDS_ANY_STATE) == 1) {
@@ -3413,10 +3406,6 @@ static rmw_ret_t rmw_take_loan_int(
           return RMW_RET_ERROR;
         }
         *taken = true;
-        // doesn't allocate, but initialise the allocator to free the chunk later when the loan
-        // is returned
-        dds_data_allocator_init(
-          cdds_subscription->enth, &cdds_subscription->data_allocator);
         // set the loaned chunk to null, so that the  loaned chunk is not release in
         // rmw_serdata_free(), but will be released when
         // `rmw_return_loaned_message_from_subscription()` is called
@@ -3424,13 +3413,10 @@ static rmw_ret_t rmw_take_loan_int(
         ddsi_serdata_unref(d);
         return RMW_RET_OK;
       } else if (d->type->iox_size > 0U) {
-        auto sample_ptr = init_and_alloc_sample(cdds_subscription, d->type->iox_size, true);
-        RET_NULL_X(sample_ptr, return RMW_RET_ERROR);
-        ddsi_serdata_to_sample(d, sample_ptr, nullptr, nullptr);
-        *loaned_message = sample_ptr;
+        RMW_SET_ERROR_MSG("Data is not send by loan api please change pub or sub");
         ddsi_serdata_unref(d);
-        *taken = true;
-        return RMW_RET_OK;
+        *taken = false;
+        return RMW_RET_ERROR;
       } else {
         RMW_SET_ERROR_MSG("Data nor loan is available to take");
         ddsi_serdata_unref(d);
